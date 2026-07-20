@@ -9,17 +9,33 @@ on:
     - cron: '0 13 * * *'
   workflow_dispatch:  # lets you trigger a run manually from the Actions tab
 
+# Permissions the GitHub Pages deploy needs
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two Pages deploys at once
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
-  send-update:
+  send-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: pip install -r week2/requirements.txt
-      - run: python week2/daily_message.py
+
+      - name: Send messages and build the dashboard
+        run: python week2/daily_message.py
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -28,3 +44,15 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DAD_GMAIL_ADDRESS: ${{ secrets.DAD_GMAIL_ADDRESS }}
           DAD_GMAIL_APP_PASSWORD: ${{ secrets.DAD_GMAIL_APP_PASSWORD }}
+
+      # Publish the dashboard even if the messaging step errored — it's written first.
+      - name: Upload dashboard artifact
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: week2/site
+
+      - name: Deploy to GitHub Pages
+        if: always()
+        id: deployment
+        uses: actions/deploy-pages@v4

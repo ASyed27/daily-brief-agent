@@ -7,3 +7,6 @@ __pycache__/
 .ipynb_checkpoints/
 venv/
 .venv/
+
+# Generated dashboard output (built in CI, published to Pages)
+week2/site/

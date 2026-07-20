@@ -1,12 +1,13 @@
 """Dad's Daily Update agent (week 2) — run by GitHub Actions each morning at 9 AM ET.
 
-An AI agent (Claude via LangChain) that each run:
-  - checks the weather forecast for Monroe Township, NJ
-  - counts how many emails Dad received today
-  - sends Dad TWO messages: a SHORT Telegram note + a FULL warm email
+Each run:
+  - fetches the weather for Monroe Township, NJ and counts Danish's emails today
+  - generates a visual dashboard (week2/site/index.html) that GitHub Pages publishes
+  - sends Danish TWO messages via an AI agent — a SHORT Telegram note + a FULL email,
+    both linking to the dashboard
 
-Secrets come from environment variables. In GitHub Actions they're injected from
-repository secrets; locally they're loaded from a .env file (git-ignored).
+Secrets come from environment variables: GitHub Actions repository secrets in CI,
+or a local .env file (git-ignored) when run locally.
 """
 import os
 import smtplib
@@ -22,80 +23,38 @@ from langchain_core.tools import tool
 from langchain_anthropic import ChatAnthropic
 from langchain.agents import create_agent
 
-LAT = 40.3364
-LON = -74.4330
+from weather import fetch_weather_data, summary_line
+import dashboard
 
-WEATHER_DESCRIPTIONS = {
-    0: "clear skies", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
-    45: "foggy", 48: "foggy", 51: "light drizzle", 61: "light rain",
-    63: "rain", 65: "heavy rain", 71: "light snow", 73: "snow",
-    75: "heavy snow", 80: "rain showers", 95: "thunderstorms"
-}
-BAD_WEATHER_CODES = {45, 48, 51, 61, 63, 65, 71, 73, 75, 80, 95}
+DASHBOARD_URL = "https://asyed27.github.io/Phnx-genai-prep/"
+SITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site")
+
+
+def fetch_email_count() -> int:
+    """Number of emails in Danish's inbox since midnight today, as an int."""
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    imap.login(os.getenv("DAD_GMAIL_ADDRESS"), os.getenv("DAD_GMAIL_APP_PASSWORD"))
+    imap.select("inbox")
+    today_str = datetime.now().strftime("%d-%b-%Y")
+    status, message_ids = imap.search(None, f'(SINCE "{today_str}")')
+    count = len(message_ids[0].split()) if message_ids[0] else 0
+    imap.logout()
+    return count
 
 
 @tool
 def get_weather_forecast() -> str:
-    """Fetches today's current weather and evening (5-8 PM) forecast for
-    Monroe Township, NJ, including temperature, conditions, rain chance,
-    wind, and sunset time. Returns a summary the agent can reason over."""
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": LAT, "longitude": LON,
-        "current": "temperature_2m,weather_code",
-        "hourly": "temperature_2m,precipitation_probability,weather_code,wind_speed_10m",
-        "daily": "sunset",
-        "temperature_unit": "fahrenheit",
-        "wind_speed_unit": "mph",
-        "timezone": "America/New_York",
-        "forecast_days": 1
-    }
-    data = requests.get(url, params=params).json()
-
-    current_temp = round(data["current"]["temperature_2m"])
-    current_desc = WEATHER_DESCRIPTIONS.get(data["current"]["weather_code"], "mixed conditions")
-
-    hourly = data["hourly"]
-    evening_hours = [17, 18, 19, 20]
-    evening_temp = round(sum(hourly["temperature_2m"][h] for h in evening_hours) / 4)
-    evening_precip = max(hourly["precipitation_probability"][h] for h in evening_hours)
-    evening_wind = round(sum(hourly["wind_speed_10m"][h] for h in evening_hours) / 4)
-    evening_code = max(hourly["weather_code"][h] for h in evening_hours)
-    evening_desc = WEATHER_DESCRIPTIONS.get(evening_code, "mixed conditions")
-
-    sunset_dt = datetime.fromisoformat(data["daily"]["sunset"][0])
-    hour_12 = sunset_dt.hour % 12 or 12
-    sunset_time = f"{hour_12}:{sunset_dt.strftime('%M %p')}"
-
-    outdoor_ok = (
-        evening_code not in BAD_WEATHER_CODES
-        and evening_precip <= 30
-        and 45 <= evening_temp <= 90
-        and evening_wind <= 20
-    )
-
-    return (
-        f"Current: {current_temp}°F, {current_desc}. "
-        f"Evening (5-8 PM): {evening_temp}°F, {evening_desc}, "
-        f"{evening_precip}% rain chance, {evening_wind} mph wind. "
-        f"Sunset at {sunset_time}. "
-        f"Outdoor conditions tonight: {'good' if outdoor_ok else 'poor'}."
-    )
+    """Fetches today's current + evening (5-8 PM) weather for Monroe Township, NJ,
+    including temperature, conditions, rain chance, wind, and sunset time.
+    Returns a one-line summary the agent can reason over."""
+    return summary_line(fetch_weather_data())
 
 
 @tool
 def count_dads_emails_today() -> str:
-    """Counts how many emails arrived in the user's dad's Gmail inbox today.
-    Returns the count as a string."""
+    """Counts how many emails arrived in Danish's Gmail inbox today."""
     try:
-        imap = imaplib.IMAP4_SSL("imap.gmail.com")
-        imap.login(os.getenv("DAD_GMAIL_ADDRESS"), os.getenv("DAD_GMAIL_APP_PASSWORD"))
-        imap.select("inbox")
-        today_str = datetime.now().strftime("%d-%b-%Y")
-        status, message_ids = imap.search(None, f'(SINCE "{today_str}")')
-        count = len(message_ids[0].split()) if message_ids[0] else 0
-        imap.logout()
-        return f"{count} emails received today"
+        return f"{fetch_email_count()} emails received today"
     except Exception as e:
         return f"Failed to check email: {str(e)}"
 
@@ -137,7 +96,26 @@ def send_email_to_dad(message: str) -> str:
         return f"Email send failed: {str(e)}"
 
 
+def build_dashboard():
+    """Fetch today's data and write the dashboard HTML that GitHub Pages serves."""
+    data = fetch_weather_data()
+    try:
+        count = fetch_email_count()
+    except Exception as e:
+        print(f"Email count failed for dashboard: {e}")
+        count = "—"
+    os.makedirs(SITE_DIR, exist_ok=True)
+    out = os.path.join(SITE_DIR, "index.html")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(dashboard.build_page(data, count))
+    print(f"Dashboard written to {out}")
+
+
 def main():
+    # 1) Build the dashboard FIRST, so it still publishes even if messaging errors later.
+    build_dashboard()
+
+    # 2) Run the agent to send the two messages (each linking to the dashboard).
     model = ChatAnthropic(model="claude-sonnet-4-6", api_key=os.getenv("ANTHROPIC_API_KEY"))
     tools = [get_weather_forecast, count_dads_emails_today,
              send_telegram_to_dad, send_email_to_dad]
@@ -148,10 +126,12 @@ def main():
         "Then send Dad TWO separate messages:\n\n"
         "1. A SHORT, concise TELEGRAM message (2-4 lines max) using send_telegram_to_dad. "
         "Just the essentials: current conditions, whether tonight is good for a walk or "
-        "tennis, and his email count. Punchy and warm, no fluff.\n\n"
+        "tennis, and his email count. Punchy and warm, no fluff. End with a short line "
+        f"inviting him to view his full dashboard: {DASHBOARD_URL}\n\n"
         "2. A LONGER, warm EMAIL using send_email_to_dad, in a friendly natural tone with "
         "the full rundown: current conditions, the evening (5-8 PM) outlook, a walk/tennis "
-        "recommendation with your reasoning, his email count, and a natural sign-off.\n\n"
+        "recommendation with your reasoning, his email count, and a natural sign-off. "
+        f"Include a line with his dashboard link: {DASHBOARD_URL}\n\n"
         "You MUST send BOTH messages. Don't be robotic in either one."
     )
 
