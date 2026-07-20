@@ -1,4 +1,4 @@
-"""Shared weather data source for the Dad Daily Update project.
+"""Shared weather data source for the Daily Brief project.
 
 Both the messaging agent (daily_message.py) and the dashboard (dashboard.py)
 pull from fetch_weather_data() so the text and the visualization always agree.

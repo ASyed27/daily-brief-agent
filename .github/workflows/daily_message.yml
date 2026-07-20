@@ -1,4 +1,4 @@
-name: Daily Update to Dad
+name: Daily Brief
 
 on:
   schedule:
@@ -39,11 +39,11 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          DAD_TELEGRAM_CHAT_ID: ${{ secrets.DAD_TELEGRAM_CHAT_ID }}
+          RECIPIENT_TELEGRAM_CHAT_ID: ${{ secrets.RECIPIENT_TELEGRAM_CHAT_ID }}
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          DAD_GMAIL_ADDRESS: ${{ secrets.DAD_GMAIL_ADDRESS }}
-          DAD_GMAIL_APP_PASSWORD: ${{ secrets.DAD_GMAIL_APP_PASSWORD }}
+          RECIPIENT_GMAIL_ADDRESS: ${{ secrets.RECIPIENT_GMAIL_ADDRESS }}
+          RECIPIENT_GMAIL_APP_PASSWORD: ${{ secrets.RECIPIENT_GMAIL_APP_PASSWORD }}
 
       # Publish the dashboard even if the messaging step errored — it's written first.
       - name: Upload dashboard artifact

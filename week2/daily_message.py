@@ -1,4 +1,4 @@
-"""Dad's Daily Update agent (week 2) — run by GitHub Actions each morning at 9 AM ET.
+"""Danish's Daily Update agent (week 2) — run by GitHub Actions each morning at 9 AM ET.
 
 Each run:
   - fetches the weather for Monroe Township, NJ and counts Danish's emails today
@@ -26,14 +26,14 @@ from langchain.agents import create_agent
 from weather import fetch_weather_data, summary_line
 import dashboard
 
-DASHBOARD_URL = "https://asyed27.github.io/Phnx-genai-prep/"
+DASHBOARD_URL = "https://asyed27.github.io/daily-brief-agent/"
 SITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site")
 
 
 def fetch_email_count() -> int:
-    """Number of emails in Danish's inbox since midnight today, as an int."""
+    """Number of emails in the recipient's inbox since midnight today, as an int."""
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
-    imap.login(os.getenv("DAD_GMAIL_ADDRESS"), os.getenv("DAD_GMAIL_APP_PASSWORD"))
+    imap.login(os.getenv("RECIPIENT_GMAIL_ADDRESS"), os.getenv("RECIPIENT_GMAIL_APP_PASSWORD"))
     imap.select("inbox")
     today_str = datetime.now().strftime("%d-%b-%Y")
     status, message_ids = imap.search(None, f'(SINCE "{today_str}")')
@@ -51,7 +51,7 @@ def get_weather_forecast() -> str:
 
 
 @tool
-def count_dads_emails_today() -> str:
+def count_emails_today() -> str:
     """Counts how many emails arrived in Danish's Gmail inbox today."""
     try:
         return f"{fetch_email_count()} emails received today"
@@ -60,12 +60,12 @@ def count_dads_emails_today() -> str:
 
 
 @tool
-def send_telegram_to_dad(message: str) -> str:
-    """Sends a SHORT, concise update to Dad via Telegram. Keep it to a few lines.
+def send_telegram(message: str) -> str:
+    """Sends a SHORT, concise update to Danish via Telegram. Keep it to a few lines.
     Use this for the quick Telegram version of the daily update."""
     try:
         token = os.getenv("TELEGRAM_BOT_TOKEN")
-        chat_id = os.getenv("DAD_TELEGRAM_CHAT_ID")
+        chat_id = os.getenv("RECIPIENT_TELEGRAM_CHAT_ID")
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         resp = requests.post(url, data={"chat_id": chat_id, "text": message})
         result = resp.json()
@@ -77,12 +77,12 @@ def send_telegram_to_dad(message: str) -> str:
 
 
 @tool
-def send_email_to_dad(message: str) -> str:
-    """Emails the FULL, detailed daily update to Dad's Gmail via Gmail SMTP.
+def send_email(message: str) -> str:
+    """Emails the FULL, detailed daily update to Danish's Gmail via Gmail SMTP.
     Use this for the longer, warm email version of the daily update."""
     try:
         sender = os.getenv("GMAIL_ADDRESS")
-        recipient = os.getenv("DAD_GMAIL_ADDRESS")
+        recipient = os.getenv("RECIPIENT_GMAIL_ADDRESS")
         msg = MIMEText(message)
         msg["From"] = sender
         msg["To"] = recipient
@@ -117,28 +117,27 @@ def main():
 
     # 2) Run the agent to send the two messages (each linking to the dashboard).
     model = ChatAnthropic(model="claude-sonnet-4-6", api_key=os.getenv("ANTHROPIC_API_KEY"))
-    tools = [get_weather_forecast, count_dads_emails_today,
-             send_telegram_to_dad, send_email_to_dad]
+    tools = [get_weather_forecast, count_emails_today, send_telegram, send_email]
     agent = create_agent(model, tools)
 
     instruction = (
-        "Check today's weather and how many emails Dad received today. "
-        "Then send Dad TWO separate messages:\n\n"
-        "1. A SHORT, concise TELEGRAM message (2-4 lines max) using send_telegram_to_dad. "
+        "Check today's weather and how many emails Danish received today. "
+        "Then send Danish TWO separate messages:\n\n"
+        "1. A SHORT, concise TELEGRAM message (2-4 lines max) using send_telegram. "
         "Just the essentials: current conditions, whether tonight is good for a walk or "
         "tennis, and his email count. Punchy and warm, no fluff. End with a short line "
         f"inviting him to view his full dashboard: {DASHBOARD_URL}\n\n"
-        "2. A LONGER, warm EMAIL using send_email_to_dad, in a friendly natural tone with "
+        "2. A LONGER, warm EMAIL using send_email, in a friendly natural tone with "
         "the full rundown: current conditions, the evening (5-8 PM) outlook, a walk/tennis "
         "recommendation with your reasoning, his email count, and a natural sign-off. "
         f"Include a line with his dashboard link: {DASHBOARD_URL}\n\n"
-        "You MUST send BOTH messages. Don't be robotic in either one."
+        "You MUST send BOTH messages. Address him as 'Danish'. Don't be robotic in either one."
     )
 
     response = agent.invoke({"messages": [("user", instruction)]})
 
     # Encoding-safe transcript so CI logs / Windows consoles won't choke on emojis
-    print(f"\n=== Dad agent run: {datetime.now().isoformat()} ===")
+    print(f"\n=== Daily brief run: {datetime.now().isoformat()} ===")
     for m in response["messages"]:
         content = m.content if hasattr(m, "content") else m
         print("-" * 60)

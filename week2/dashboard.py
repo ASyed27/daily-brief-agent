@@ -1,4 +1,4 @@
-"""Dashboard renderer for the Dad Daily Update project.
+"""Dashboard renderer for the Daily Brief project.
 
 render_dashboard(...) returns the inner HTML (a <style> block + markup) that can
 be embedded directly. build_page(...) wraps it into a full standalone HTML
@@ -293,6 +293,6 @@ def build_page(data: dict, email_count, generated_at: datetime = None) -> str:
         "<!doctype html>\n<html lang=\"en\">\n<head>\n"
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        "<title>Dad's Daily Update</title>\n"
+        "<title>Danish's Daily Update</title>\n"
         "</head>\n<body>\n" + inner + "\n</body>\n</html>\n"
     )
