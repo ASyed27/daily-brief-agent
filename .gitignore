@@ -10,3 +10,5 @@ venv/
 
 # Generated dashboard output (built in CI, published to Pages)
 week2/site/
+# Private inbox breakdown (email attachment — never commit or publish)
+week2/inbox-breakdown.html

@@ -1,20 +1,21 @@
-"""Danish's Daily Update agent (week 2) — run by GitHub Actions each morning at 9 AM ET.
+"""Danish's Daily Update agent (week 2) — run by GitHub Actions each morning.
 
 Each run:
-  - fetches the weather for Monroe Township, NJ and counts Danish's emails today
-  - generates a visual dashboard (week2/site/index.html) that GitHub Pages publishes
-  - sends Danish TWO messages via an AI agent — a SHORT Telegram note + a FULL email,
-    both linking to the dashboard
+  - fetches weather for Monroe Township, NJ
+  - analyzes today's inbox (categorize / flag important / filter newsletters & spam)
+  - publishes the PUBLIC dashboard (weather + aggregate inbox counts) to GitHub Pages
+  - builds the PRIVATE interactive inbox breakdown and ATTACHES it to the email
+  - sends Danish a SHORT Telegram note + a FULL email, both linking the dashboard
 
-Secrets come from environment variables: GitHub Actions repository secrets in CI,
-or a local .env file (git-ignored) when run locally.
+Secrets come from environment variables (GitHub Actions secrets in CI; local .env otherwise).
 """
 import os
 import smtplib
-import imaplib
 import requests
-from email.mime.text import MIMEText
 from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 
 from dotenv import load_dotenv
 load_dotenv()  # no-op in CI (no .env); loads .env when run locally
@@ -24,45 +25,18 @@ from langchain_anthropic import ChatAnthropic
 from langchain.agents import create_agent
 
 from weather import fetch_weather_data, summary_line
+from email_analysis import analyze
+from email_dashboard import build_email_dashboard
 import dashboard
 
 DASHBOARD_URL = "https://asyed27.github.io/daily-brief-agent/"
 SITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site")
-
-
-def fetch_email_count() -> int:
-    """Number of emails in the recipient's inbox since midnight today, as an int."""
-    imap = imaplib.IMAP4_SSL("imap.gmail.com")
-    imap.login(os.getenv("RECIPIENT_GMAIL_ADDRESS"), os.getenv("RECIPIENT_GMAIL_APP_PASSWORD"))
-    imap.select("inbox")
-    today_str = datetime.now().strftime("%d-%b-%Y")
-    status, message_ids = imap.search(None, f'(SINCE "{today_str}")')
-    count = len(message_ids[0].split()) if message_ids[0] else 0
-    imap.logout()
-    return count
-
-
-@tool
-def get_weather_forecast() -> str:
-    """Fetches today's current + evening (5-8 PM) weather for Monroe Township, NJ,
-    including temperature, conditions, rain chance, wind, and sunset time.
-    Returns a one-line summary the agent can reason over."""
-    return summary_line(fetch_weather_data())
-
-
-@tool
-def count_emails_today() -> str:
-    """Counts how many emails arrived in Danish's Gmail inbox today."""
-    try:
-        return f"{fetch_email_count()} emails received today"
-    except Exception as e:
-        return f"Failed to check email: {str(e)}"
+ATTACHMENT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inbox-breakdown.html")
 
 
 @tool
 def send_telegram(message: str) -> str:
-    """Sends a SHORT, concise update to Danish via Telegram. Keep it to a few lines.
-    Use this for the quick Telegram version of the daily update."""
+    """Sends a SHORT, concise update to Danish via Telegram (a few lines)."""
     try:
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("RECIPIENT_TELEGRAM_CHAT_ID")
@@ -78,15 +52,21 @@ def send_telegram(message: str) -> str:
 
 @tool
 def send_email(message: str) -> str:
-    """Emails the FULL, detailed daily update to Danish's Gmail via Gmail SMTP.
-    Use this for the longer, warm email version of the daily update."""
+    """Emails the full daily update to Danish, attaching his interactive inbox
+    breakdown (inbox-breakdown.html) if it was generated this run."""
     try:
         sender = os.getenv("GMAIL_ADDRESS")
         recipient = os.getenv("RECIPIENT_GMAIL_ADDRESS")
-        msg = MIMEText(message)
+        msg = MIMEMultipart()
         msg["From"] = sender
         msg["To"] = recipient
         msg["Subject"] = f"Your Daily Update — {datetime.now().strftime('%A, %b %d')}"
+        msg.attach(MIMEText(message, "plain"))
+        if os.path.exists(ATTACHMENT_PATH):
+            with open(ATTACHMENT_PATH, "rb") as f:
+                part = MIMEApplication(f.read(), _subtype="html")
+            part.add_header("Content-Disposition", "attachment", filename="inbox-breakdown.html")
+            msg.attach(part)
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
             server.login(sender, os.getenv("GMAIL_APP_PASSWORD"))
@@ -96,47 +76,70 @@ def send_email(message: str) -> str:
         return f"Email send failed: {str(e)}"
 
 
-def build_dashboard():
-    """Fetch today's data and write the dashboard HTML that GitHub Pages serves."""
-    data = fetch_weather_data()
+def build_everything():
+    """Fetch weather, analyze inbox, write the public page + the private attachment.
+    Returns (weather_dict, analysis_dict_or_None)."""
+    weather = fetch_weather_data()
+
+    analysis = None
+    email_stats = None
     try:
-        count = fetch_email_count()
+        analysis = analyze(os.getenv("RECIPIENT_GMAIL_ADDRESS"),
+                           os.getenv("RECIPIENT_GMAIL_APP_PASSWORD"),
+                           os.getenv("ANTHROPIC_API_KEY"),
+                           ical_url=os.getenv("RECIPIENT_ICAL_URL"))
+        email_stats = {
+            "total": analysis["total"], "newsletters": analysis["newsletters"],
+            "spam": analysis["spam"], "attention": analysis["attention"],
+            "categories": analysis["label_counts"],
+        }
+        with open(ATTACHMENT_PATH, "w", encoding="utf-8") as f:
+            f.write(build_email_dashboard(analysis))
+        print(f"Inbox analyzed: {analysis['total']} total, {len(analysis['nonbulk'])} non-bulk, "
+              f"{analysis['attention']} need attention. Attachment written.")
     except Exception as e:
-        print(f"Email count failed for dashboard: {e}")
-        count = "—"
+        print(f"Email analysis failed (continuing with weather only): {e}")
+
     os.makedirs(SITE_DIR, exist_ok=True)
-    out = os.path.join(SITE_DIR, "index.html")
-    with open(out, "w", encoding="utf-8") as f:
-        f.write(dashboard.build_page(data, count))
-    print(f"Dashboard written to {out}")
+    total = email_stats["total"] if email_stats else 0
+    with open(os.path.join(SITE_DIR, "index.html"), "w", encoding="utf-8") as f:
+        f.write(dashboard.build_page(weather, total, email_stats=email_stats))
+    print(f"Public dashboard written to {SITE_DIR}/index.html")
+    return weather, analysis
 
 
 def main():
-    # 1) Build the dashboard FIRST, so it still publishes even if messaging errors later.
-    build_dashboard()
+    weather, analysis = build_everything()
 
-    # 2) Run the agent to send the two messages (each linking to the dashboard).
+    if analysis:
+        email_facts = (
+            f"His inbox got {analysis['total']} emails today; you filtered out {analysis['newsletters']} "
+            f"newsletters/promotions and {analysis['spam']} spam, leaving {len(analysis['nonbulk'])} that "
+            f"matter, of which {analysis['attention']} need attention. What matters: {analysis['summary']}"
+        )
+        attach_note = "His full interactive inbox breakdown is attached to this email (inbox-breakdown.html)."
+    else:
+        email_facts = "Email analysis was unavailable today, so just cover the weather."
+        attach_note = ""
+
     model = ChatAnthropic(model="claude-sonnet-4-6", api_key=os.getenv("ANTHROPIC_API_KEY"))
-    tools = [get_weather_forecast, count_emails_today, send_telegram, send_email]
-    agent = create_agent(model, tools)
+    agent = create_agent(model, [send_telegram, send_email])
 
     instruction = (
-        "Check today's weather and how many emails Danish received today. "
-        "Then send Danish TWO separate messages:\n\n"
-        "1. A SHORT, concise TELEGRAM message (2-4 lines max) using send_telegram. "
-        "Just the essentials: current conditions, whether tonight is good for a walk or "
-        "tennis, and his email count. Punchy and warm, no fluff. End with a short line "
-        f"inviting him to view his full dashboard: {DASHBOARD_URL}\n\n"
-        "2. A LONGER, warm EMAIL using send_email, in a friendly natural tone with "
-        "the full rundown: current conditions, the evening (5-8 PM) outlook, a walk/tennis "
-        "recommendation with your reasoning, his email count, and a natural sign-off. "
-        f"Include a line with his dashboard link: {DASHBOARD_URL}\n\n"
-        "You MUST send BOTH messages. Address him as 'Danish'. Don't be robotic in either one."
+        "You are writing Danish's warm morning update from the data below. Do not invent facts.\n\n"
+        f"WEATHER: {summary_line(weather)}\n\n"
+        f"EMAIL: {email_facts}\n\n"
+        "Send TWO messages:\n"
+        "1. send_telegram — a SHORT note (2-4 lines): current conditions, whether tonight is good for a "
+        "walk or tennis, and a one-line inbox note (how many need his attention). End with the dashboard "
+        f"link: {DASHBOARD_URL}\n\n"
+        "2. send_email — a warm, fuller note: the weather rundown, the evening walk/tennis recommendation "
+        f"with reasoning, and a short inbox rundown. {attach_note} Include the dashboard link: {DASHBOARD_URL}\n\n"
+        "Address him as 'Danish'. You MUST send BOTH messages. Don't be robotic."
     )
 
     response = agent.invoke({"messages": [("user", instruction)]})
 
-    # Encoding-safe transcript so CI logs / Windows consoles won't choke on emojis
     print(f"\n=== Daily brief run: {datetime.now().isoformat()} ===")
     for m in response["messages"]:
         content = m.content if hasattr(m, "content") else m

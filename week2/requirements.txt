@@ -1,5 +1,8 @@
 langchain
 langchain-anthropic
 langgraph
+anthropic
 requests
 python-dotenv
+icalendar
+recurring-ical-events

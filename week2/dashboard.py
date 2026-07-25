@@ -143,6 +143,17 @@ STYLE = """
 
   .foot { text-align: center; color: var(--ink-soft); font-size: 12px; margin-top: 4px; line-height: 1.5; }
   .foot b { color: var(--ink); font-weight: 600; }
+  .inbox-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+  .inbox-grid > div { text-align: center; }
+  .inbox-grid b { display: block; font-family: var(--font-display); font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .inbox-grid b.attn { color: var(--accent); }
+  .inbox-grid span { display: block; font-size: 10.5px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ink-soft); font-weight: 600; margin-top: 2px; }
+  .catbars { display: flex; flex-direction: column; gap: 7px; }
+  .catrow { display: grid; grid-template-columns: 104px 1fr 24px; align-items: center; gap: 9px; font-size: 12px; }
+  .catrow .lbl { color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .catrow .track { height: 7px; background: color-mix(in srgb, var(--ink-soft) 16%, transparent); border-radius: 99px; overflow: hidden; }
+  .catrow .fill { height: 100%; background: var(--accent); border-radius: 99px; }
+  .catrow .num { text-align: right; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 </style>
 """
 
@@ -223,7 +234,45 @@ def _chart_svg(hourly, now_hour: int) -> str:
 </svg>"""
 
 
-def render_dashboard(data: dict, email_count, generated_at: datetime = None) -> str:
+def _inbox_section(email_count, stats):
+    """Aggregate inbox card for the PUBLIC page — counts and generic category names only."""
+    if not stats:
+        return (
+            '<section class="card inbox">\n'
+            '      <div><p class="inbox-k">Inbox today</p>'
+            '<p class="inbox-sub">emails since midnight</p></div>\n'
+            f'      <p class="inbox-v">{email_count}</p>\n'
+            '    </section>'
+        )
+    total = stats.get("total", email_count)
+    news = stats.get("newsletters", 0)
+    spam = stats.get("spam", 0)
+    attn = stats.get("attention", 0)
+    cats = stats.get("categories", {}) or {}
+    maxc = max(cats.values()) if cats else 1
+    bars = "".join(
+        f'<div class="catrow"><span class="lbl">{name}</span>'
+        f'<div class="track"><div class="fill" style="width:{round(n / maxc * 100)}%"></div></div>'
+        f'<span class="num">{n}</span></div>'
+        for name, n in sorted(cats.items(), key=lambda x: -x[1])
+    )
+    catblock = f'<div class="catbars">{bars}</div>' if bars else ""
+    return (
+        '<section class="card">\n'
+        '      <div class="card-head"><h2 class="card-title">Inbox today</h2>'
+        '<span class="card-note">details sent to your email</span></div>\n'
+        '      <div class="inbox-grid">\n'
+        f'        <div><b>{total}</b><span>arrived</span></div>\n'
+        f'        <div><b>{news}</b><span>newsletters</span></div>\n'
+        f'        <div><b>{spam}</b><span>spam</span></div>\n'
+        f'        <div><b class="attn">{attn}</b><span>need you</span></div>\n'
+        '      </div>\n'
+        f'      {catblock}\n'
+        '    </section>'
+    )
+
+
+def render_dashboard(data: dict, email_count, generated_at: datetime = None, email_stats: dict = None) -> str:
     if generated_at is None:
         generated_at = datetime.now()
     kind, vlabel, vhead, vsub = _verdict(data)
@@ -271,13 +320,7 @@ def render_dashboard(data: dict, email_count, generated_at: datetime = None) -> 
       {_chart_svg(data['hourly'], generated_at.hour)}
     </section>
 
-    <section class="card inbox">
-      <div>
-        <p class="inbox-k">Inbox today</p>
-        <p class="inbox-sub">emails since midnight</p>
-      </div>
-      <p class="inbox-v">{email_count}</p>
-    </section>
+    {_inbox_section(email_count, email_stats)}
 
     <p class="foot">Updated automatically at <b>{updated}</b><br>refreshes every morning · Monroe Township, NJ</p>
   </main>
@@ -286,9 +329,9 @@ def render_dashboard(data: dict, email_count, generated_at: datetime = None) -> 
     return STYLE + markup
 
 
-def build_page(data: dict, email_count, generated_at: datetime = None) -> str:
+def build_page(data: dict, email_count, generated_at: datetime = None, email_stats: dict = None) -> str:
     """Full standalone HTML document for GitHub Pages."""
-    inner = render_dashboard(data, email_count, generated_at)
+    inner = render_dashboard(data, email_count, generated_at, email_stats)
     return (
         "<!doctype html>\n<html lang=\"en\">\n<head>\n"
         '<meta charset="utf-8">\n'
